@@ -16,7 +16,7 @@ class GetAllConfigByTenant extends BaseAction {
         if (! isset($result)) {
             return [];
         } else {
-            return \Json::decodeAsArray($result)['pageItems'];
+            return \Json::decodeAsArray($result);
         }
     }
 }
