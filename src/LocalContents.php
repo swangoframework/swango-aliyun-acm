@@ -3,89 +3,90 @@ namespace Swango\Aliyun\Acm;
 use Swango\Aliyun\Acm\Action\DeleteAllDatums;
 use Swango\Aliyun\Acm\Action\GetConfig;
 use Swango\Aliyun\Acm\Action\SyncUpdateAll;
+use Swango\Aliyun\Acm\Exception\ACMException;
 class LocalContents {
-    private static $contents = [];
-    public static function put(string $group, string $data_id, string $content, bool $sync_aliyun_acm = false): void {
-        self::$contents[$group][$data_id] = $content;
-        if ($sync_aliyun_acm) {
-            (new SyncUpdateAll($group, $data_id, $content));
-        }
-    }
     /**
-     * if $data_id is null, $sync_aliyun_acm remove local loaded content
-     * @param string $group
-     * @param string|null $data_id
-     * @param bool $sync_aliyun_acm
+     * @var \Swoole\Table $table
      */
-    public static function remove(string $group, ?string $data_id = null, bool $sync_aliyun_acm = false): void {
-        if (! isset($data_id)) {
-            if (array_key_exists($group, self::$contents)) {
-                if ($sync_aliyun_acm) {
-                    foreach (self::$contents[$group] as $d_id) {
-                        (new DeleteAllDatums($group, $d_id))->getResult();
-                    }
-                }
-                unset(self::$contents[$group]);
-            }
-        } elseif (self::isLoaded($group, $data_id)) {
-            if ($sync_aliyun_acm) {
-                (new DeleteAllDatums($group, $data_id))->getResult();
-            }
-            unset(self::$contents[$group][$data_id]);
-        }
+    private static $table;
+    const TABLE_SIZE = 1024;
+    const TABLE_COLUMN = [
+        'content' => [
+            \Swoole\Table::TYPE_STRING,
+            128
+        ],
+        'update_time' => [
+            \Swoole\Table::TYPE_INT,
+            4
+        ]
+    ];
+    private static function makeKey(string $group, string $data_id): string {
+        return hash('crc32b', sprintf('%s-%s', $group, $data_id));
     }
-    public static function removeOthers(string $keep_group, ?string $keep_data_id = null) {
-        if (empty($content)) {
-            return;
-        }
-        if (isset($keep_data_id)) {
-            if (! self::isLoaded($keep_group, $keep_data_id)) {
-                self::removeAll();
-            } else {
-                foreach (self::$contents as $group => $group_data) {
-                    if ($group !== $keep_group) {
-                        unset(self::$contents[$group]);
-                    } else {
-                        foreach ($group_data as $data_id => $content) {
-                            if ($data_id !== $keep_data_id) {
-                                unset(self::$contents[$group][$data_id]);
-                            }
-                        }
-                    }
-                }
-            }
+    public static function getTable() {
+        if (isset(self::$table)) {
+            return self::$table;
         } else {
-            foreach (self::$contents as $group => $group_data) {
-                if ($group !== $keep_group) {
-                    unset(self::$contents[$group]);
-                }
+            $table = new \Swoole\Table(self::TABLE_SIZE);
+            foreach (self::TABLE_COLUMN as $name => $info) {
+                [
+                    $type,
+                    $size
+                ] = $info;
+                $table->column($name, $type, $size);
+            }
+            if (! $table->create()) {
+                throw new ACMException('create swoole table fail');
+            }
+            return self::$table = $table;
+        }
+    }
+    public static function put(string $group, string $data_id, ?string $content, bool $sync_aliyun_acm = false): void {
+        if ($sync_aliyun_acm) {
+            (new SyncUpdateAll($group, $data_id, $content))->getResult();
+        }
+        $key = self::makeKey($group, $data_id);
+        $table = self::getTable();
+        $result = $table->set($key, [
+            'content' => $content,
+            'update_time' => time()
+        ]);
+        if (false === $result) {
+            throw new ACMException('local content put error');
+        }
+    }
+    public static function remove(string $group, string $data_id, bool $sync_aliyun_acm = false): void {
+        if ($sync_aliyun_acm) {
+            (new DeleteAllDatums($group, $data_id))->getResult();
+        }
+        if (self::exist($group, $data_id)) {
+            $key = self::makeKey($group, $data_id);
+            $table = self::getTable();
+            $result = $table->del($key);
+            if (false === $result) {
+                throw new ACMException('local content remove error');
             }
         }
     }
-    public static function get(string $group, string $data_id, bool $sync_aliyun_acm = false): ?string {
-        if ($sync_aliyun_acm) {
-            self::$contents[$group][$data_id] = (new GetConfig($group, $data_id))->getResult();
+    public static function get(string $group, string $data_id, bool $force_sync_aliyun_acm = false): ?string {
+        if ($force_sync_aliyun_acm || ! self::exist($group, $data_id)) {
+            $content = (new GetConfig($group, $data_id))->getResult();
+            self::put($group, $data_id, $content);
         }
-        return self::$contents[$group][$data_id] ?? null;
-    }
-    public static function removeAll() {
-        self::$contents = [];
-    }
-    public static function getAllContent(): array {
-        return self::$contents;
+        $key = self::makeKey($group, $data_id);
+        return self::getTable()->get($key)['content'];
     }
     public static function buildListenerStr(string $group, string $data_id) {
         $config = \Swango\Environment::getConfig('aliyun/acm');
         $tenant = $config['tenant'];
         $content = self::get($group, $data_id);
-        $content_md5 = isset($content) ? md5($content) : '';
+        $content_md5 = empty($content) ? '' : md5($content);
         $str = sprintf('%s%%02%s%%02%s%%02%s%%01', $data_id, $group, $content_md5, $tenant);
         return $str;
     }
-    public static function isLoaded(string $group, string $data_id = null): bool {
-        if (array_key_exists($group, self::$contents) && array_key_exists($data_id, self::$contents[$group])) {
-            return true;
-        }
-        return false;
+    public static function exist(string $group, string $data_id): bool {
+        $key = self::makeKey($group, $data_id);
+        $table = self::getTable();
+        return $table->exist($key);
     }
 }

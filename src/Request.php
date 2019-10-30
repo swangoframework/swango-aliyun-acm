@@ -35,7 +35,7 @@ class Request {
         $this->headers['timeStamp'] = $time;
         $this->headers['Spas-Signature'] = Util::getSign($this->tenant, $this->group, $time, $this->access_key_secret);
         if ($this->with_long_timeout_header) {
-            $this->headers['longPullingTimeout'] = 3000;
+            $this->headers['longPullingTimeout'] = 60000;
         }
         $this->headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=utf-8';
         return $this->headers;

@@ -1,7 +1,7 @@
 <?php
 namespace Swango\Aliyun\Acm;
 class Client extends \BaseClient {
-    protected const PORT = 8080;
+    protected const PORT = 8080, TIMEOUT = 65;
     public function sendRequest(Request $request = null, string $host): void {
         $uri = new \Swlib\Http\Uri();
         if (filter_var($host, FILTER_VALIDATE_IP)) {// Valid IP
