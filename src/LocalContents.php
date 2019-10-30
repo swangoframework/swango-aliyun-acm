@@ -23,22 +23,23 @@ class LocalContents {
     private static function makeKey(string $group, string $data_id): string {
         return hash('crc32b', sprintf('%s-%s', $group, $data_id));
     }
-    public static function getTable() {
-        if (isset(self::$table)) {
-            return self::$table;
-        } else {
+    public static function initTable(): void {
+        if (! isset(self::$table)) {
             $table = new \Swoole\Table(self::TABLE_SIZE);
-            foreach (self::TABLE_COLUMN as $name => $info) {
-                [
-                    $type,
-                    $size
-                ] = $info;
+            foreach (self::TABLE_COLUMN as $name => [$type, $size]) {
                 $table->column($name, $type, $size);
             }
             if (! $table->create()) {
                 throw new ACMException('create swoole table fail');
             }
-            return self::$table = $table;
+            self::$table = $table;
+        }
+    }
+    public static function getTable() {
+        if (isset(self::$table)) {
+            return self::$table;
+        } else {
+            throw new ACMException('need to init table before create worker');
         }
     }
     public static function put(string $group, string $data_id, ?string $content, bool $sync_aliyun_acm = false): void {
